@@ -12,3 +12,4 @@ venv.bak/
 .DS_Store
 *.swp
 *.swo
+__marimo__/

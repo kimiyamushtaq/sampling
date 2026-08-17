@@ -1,6 +1,15 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#     "marimo>=0.23.16",
+#     "numpy==2.2.6",
+#     "scipy==1.15.3",
+# ]
+# ///
+
 import marimo
 
-__generated_with = "0.23.15"
+__generated_with = "0.23.16"
 app = marimo.App(width="medium", auto_download=["html"])
 
 
@@ -10,12 +19,13 @@ def _():
     import io
     import math
     import os
+    import urllib.request
     import marimo as mo
     import numpy as np
     from scipy import signal
     from scipy.io import wavfile
 
-    return base64, io, math, mo, np, os, signal, wavfile
+    return base64, io, math, mo, np, os, signal, urllib, wavfile
 
 
 @app.cell
@@ -113,16 +123,158 @@ def _(
     sample_tracks,
     signal,
     source_type,
+    urllib,
     wavfile,
 ):
-    def _extract_audio_metadata(input_bytes_or_path):
-        if isinstance(input_bytes_or_path, str):
-            with open(input_bytes_or_path, "rb") as _f:
-                _raw_bytes = _f.read()
-        else:
-            _raw_bytes = input_bytes_or_path
+    def _generate_procedural_sample(name):
+        sr = 44100
+        dur = 4.0
+        t = np.linspace(0, dur, int(sr * dur), endpoint=False)
+        name_lower = str(name).lower()
 
-        _bio = io.BytesIO(_raw_bytes)
+        if "string" in name_lower:
+            chords = [
+                ([261.63, 329.63, 392.00, 523.25], 1.0),
+                ([196.00, 246.94, 293.66, 392.00], 1.0),
+                ([220.00, 261.63, 329.63, 440.00], 1.0),
+                ([174.61, 220.00, 261.63, 349.23], 1.0),
+            ]
+            audio = np.zeros_like(t)
+            step = int(sr * 1.0)
+            vibrato = 1.0 + 0.008 * np.sin(2 * np.pi * 5.5 * t)
+            for i, (freqs, _) in enumerate(chords):
+                start = i * step
+                end = min(start + step, len(t))
+                sub_t = t[start:end] - t[start]
+                env = np.sin(np.pi * sub_t / 1.0) ** 0.5
+                sig = np.zeros(len(sub_t))
+                for f in freqs:
+                    sig += 0.35 * np.sin(2 * np.pi * f * vibrato[start:end] * sub_t)
+                    sig += 0.20 * np.sin(2 * np.pi * (2 * f) * vibrato[start:end] * sub_t)
+                    sig += 0.12 * np.sin(2 * np.pi * (3 * f) * sub_t)
+                audio[start:end] = sig * env
+
+        elif "drum" in name_lower:
+            audio = np.zeros_like(t)
+            beat_len = int(sr * 0.5)
+            for beat in range(8):
+                start = beat * beat_len
+                hh_len = int(sr * 0.06)
+                hh_t = np.linspace(0, 0.06, hh_len, endpoint=False)
+                hh = np.random.randn(hh_len) * np.exp(-hh_t * 60) * 0.2
+                audio[start:start + hh_len] += hh
+                if beat % 2 == 0:
+                    k_len = int(sr * 0.25)
+                    k_t = np.linspace(0, 0.25, k_len, endpoint=False)
+                    k_freq = 150 * np.exp(-k_t * 25) + 40
+                    kick = np.sin(2 * np.pi * np.cumsum(k_freq) / sr) * np.exp(-k_t * 12) * 0.8
+                    audio[start:start + k_len] += kick
+                else:
+                    s_len = int(sr * 0.2)
+                    s_t = np.linspace(0, 0.2, s_len, endpoint=False)
+                    snare = (np.sin(2 * np.pi * 180 * s_t) * 0.4 + np.random.randn(s_len) * 0.5) * np.exp(-s_t * 18)
+                    audio[start:start + s_len] += snare
+
+        elif "jazz" in name_lower:
+            chords = [
+                [261.63, 329.63, 392.00, 493.88],
+                [220.00, 261.63, 329.63, 392.00],
+                [293.66, 349.23, 440.00, 523.25],
+                [196.00, 246.94, 293.66, 349.23],
+            ]
+            audio = np.zeros_like(t)
+            step = int(sr * 1.0)
+            tremolo = 1.0 + 0.15 * np.sin(2 * np.pi * 6.0 * t)
+            for i, chord in enumerate(chords):
+                start = i * step
+                sub_t = np.linspace(0, 1.0, step, endpoint=False)
+                decay = np.exp(-sub_t * 2.2)
+                sig = np.zeros(step)
+                for f in chord:
+                    sig += 0.3 * np.sin(2 * np.pi * f * sub_t) + 0.15 * np.sin(2 * np.pi * 2.76 * f * sub_t)
+                audio[start:start + step] = sig * decay * tremolo[start:start + step]
+
+        elif "trumpet" in name_lower:
+            notes = [(392.00, 0.6), (440.00, 0.4), (523.25, 0.8), (587.33, 0.6), (659.25, 1.2), (523.25, 0.4)]
+            audio = np.zeros_like(t)
+            pos = 0
+            vibrato = 1.0 + 0.012 * np.sin(2 * np.pi * 5.0 * t)
+            for f, dur_n in notes:
+                n_len = min(int(sr * dur_n), len(t) - pos)
+                if n_len <= 0:
+                    break
+                sub_t = np.linspace(0, dur_n, n_len, endpoint=False)
+                env = np.minimum(sub_t / 0.05, 1.0) * np.minimum((dur_n - sub_t) / 0.05, 1.0)
+                vib = vibrato[pos:pos + n_len]
+                sig = 0.4 * np.sin(2 * np.pi * f * vib * sub_t) + 0.3 * np.sin(2 * np.pi * 2 * f * vib * sub_t) + 0.2 * np.sin(2 * np.pi * 3 * f * vib * sub_t)
+                audio[pos:pos + n_len] = sig * env
+                pos += n_len
+
+        else:
+            sr = 16000
+            dur = 4.0
+            t = np.linspace(0, dur, int(sr * dur), endpoint=False)
+            f0 = 130.0
+            vowel = np.zeros_like(t)
+            for h in range(1, 18):
+                vowel += (1.0 / (h ** 0.85)) * np.sin(2 * np.pi * (h * f0) * t)
+            env = 0.5 * (1 - np.cos(2 * np.pi * 0.5 * t))
+            audio = vowel * env * 0.4
+
+        max_val = np.max(np.abs(audio))
+        if max_val > 1e-6:
+            audio = audio / max_val * 0.9
+        pcm = (audio * 32767).astype(np.int16)
+        bio = io.BytesIO()
+        wavfile.write(bio, sr, pcm)
+        return bio.getvalue()
+
+
+    def _load_audio_bytes(input_bytes_or_path):
+        if not isinstance(input_bytes_or_path, str):
+            return input_bytes_or_path
+
+        path = input_bytes_or_path
+
+        # 1. Try reading local file
+        if os.path.exists(path):
+            try:
+                with open(path, "rb") as f:
+                    data = f.read()
+                if data.startswith(b"RIFF") and b"WAVE" in data[:16]:
+                    wavfile.read(io.BytesIO(data))
+                    return data
+            except Exception:
+                pass
+
+        # 2. Try fetching clean binary from GitHub raw (resolves Pyodide WASM UTF-8 MEMFS corruption)
+        filename = os.path.basename(path)
+        raw_url = f"https://raw.githubusercontent.com/kimiyamushtaq/sampling/main/samples/{filename}"
+        try:
+            try:
+                import pyodide.http
+                resp = pyodide.http.open_url(raw_url)
+                data = resp.read()
+                if isinstance(data, str):
+                    data = data.encode("latin1")
+                wavfile.read(io.BytesIO(data))
+                return data
+            except ImportError:
+                pass
+
+            with urllib.request.urlopen(raw_url, timeout=5) as resp:
+                data = resp.read()
+            wavfile.read(io.BytesIO(data))
+            return data
+        except Exception:
+            pass
+
+        # 3. Infallible fallback: Generate procedural audio
+        return _generate_procedural_sample(filename)
+
+
+    def _extract_audio_metadata(input_bytes):
+        _bio = io.BytesIO(input_bytes)
         _sr, _data = wavfile.read(_bio)
 
         _channels = 1 if _data.ndim == 1 else _data.shape[1]
@@ -137,23 +289,17 @@ def _(
             "duration": _duration,
             "bit_depth": _bit_depth,
             "bitrate_kbps": _bitrate,
-            "size_bytes": len(_raw_bytes),
+            "size_bytes": len(input_bytes),
             "format_name": "WAV (PCM)",
         }
 
 
-    def _resample_audio(input_bytes_or_path, target_sr):
-        if isinstance(input_bytes_or_path, str):
-            with open(input_bytes_or_path, "rb") as _f:
-                _bio_in = io.BytesIO(_f.read())
-        else:
-            _bio_in = io.BytesIO(input_bytes_or_path)
-
+    def _resample_audio(input_bytes, target_sr):
+        _bio_in = io.BytesIO(input_bytes)
         _orig_sr, _data = wavfile.read(_bio_in)
 
         if _orig_sr == target_sr:
-            _bio_in.seek(0)
-            return _bio_in.read()
+            return input_bytes
 
         _orig_dtype = _data.dtype
         if np.issubdtype(_orig_dtype, np.integer):
@@ -176,13 +322,13 @@ def _(
 
 
     if source_type.value == "Pre-provided Sample":
-        _audio_source = sample_selector.value
-        _track_title = next((k for k, v in sample_tracks.items() if v == _audio_source), "Sample Track")
-        _has_audio = bool(_audio_source and os.path.exists(_audio_source))
+        _audio_source_input = sample_selector.value
+        _track_title = next((k for k, v in sample_tracks.items() if v == _audio_source_input), "Sample Track")
+        _has_audio = bool(_audio_source_input)
     else:
-        _audio_source = file_uploader.contents(0)
+        _audio_source_input = file_uploader.contents(0)
         _track_title = file_uploader.name(0) or "Uploaded Audio"
-        _has_audio = bool(_audio_source)
+        _has_audio = bool(_audio_source_input)
 
     if not _has_audio:
         player_view = mo.callout(
@@ -191,15 +337,16 @@ def _(
         )
     else:
         try:
+            _raw_audio_bytes = _load_audio_bytes(_audio_source_input)
             _target_sr = sample_rate_selector.value
-            _meta = _extract_audio_metadata(_audio_source)
+            _meta = _extract_audio_metadata(_raw_audio_bytes)
             _orig_sr = _meta["sample_rate"]
             _orig_size_bytes = _meta["size_bytes"]
             _orig_size_kb = _orig_size_bytes / 1024
             _orig_bitrate = _meta["bitrate_kbps"]
 
             # Resample audio using pure SciPy polyphase filtering
-            _resampled_bytes = _resample_audio(_audio_source, _target_sr)
+            _resampled_bytes = _resample_audio(_raw_audio_bytes, _target_sr)
             _new_size_bytes = len(_resampled_bytes)
             _new_size_kb = _new_size_bytes / 1024
             _resampled_meta = _extract_audio_metadata(_resampled_bytes)
